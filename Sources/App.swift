@@ -1,4 +1,3 @@
-Swift
 import SwiftUI
 
 @main
