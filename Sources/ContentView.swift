@@ -9,7 +9,7 @@ enum AppLanguage: String {
     var title: String { self == .en ? "iPhone Webcam Pro" : "iPhone Kamera Pro" }
     var statusWait: String { self == .en ? "Waiting for PC (USB :8888)..." : "Oczekiwanie na PC (USB :8888)..." }
     var statusLive: String { self == .en ? "Live 1080p 60 FPS (USB)" : "Nadawanie 1080p 60 FPS (USB)" }
-    var statusDenied: String { self == .en ? "Camera access denied in Settings." : "Brak dostępu do kamery w Ustawieniach." }
+    var statusDenied: String { self == .en ? "Camera access denied." : "Brak dostępu do kamery." }
     var torch: String { self == .en ? "Torch" : "Latarka" }
     var focus: String { self == .en ? "Focus" : "Ostrość" }
     var cam: String { self == .en ? "Camera" : "Kamera" }
@@ -19,41 +19,26 @@ enum AppLanguage: String {
     var zoom: String { self == .en ? "Zoom" : "Zoom" }
     var exp: String { self == .en ? "Exposure" : "Ekspozycja" }
     var wb: String { self == .en ? "WB Lock" : "Blokada WB" }
-    var hint: String { self == .en ? "Synced live with Windows • Scroll for more controls" : "Synchronizacja z PC • Przewiń w dół po więcej opcji" }
+    var hint: String { self == .en ? "Synced with PC • Scroll for more" : "Synchronizacja z PC • Przewiń po więcej" }
 }
 
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
-
     func makeUIView(context: Context) -> PreviewUIView {
-        let view = PreviewUIView()
-        view.previewLayer.session = session
-        view.previewLayer.videoGravity = .resizeAspectFill
-        return view
+        let v = PreviewUIView(); v.previewLayer.session = session; v.previewLayer.videoGravity = .resizeAspectFill; return v
     }
-
-    func updateUIView(_ uiView: PreviewUIView, context: Context) {
-        uiView.updateOrientation()
-    }
-
+    func updateUIView(_ uiView: PreviewUIView, context: Context) { uiView.updateOrientation() }
     final class PreviewUIView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            previewLayer.frame = bounds
-            updateOrientation()
-        }
-
+        override func layoutSubviews() { super.layoutSubviews(); previewLayer.frame = bounds; updateOrientation() }
         func updateOrientation() {
-            guard let conn = previewLayer.connection, conn.isVideoOrientationSupported else { return }
-            let orient = window?.windowScene?.interfaceOrientation ?? .portrait
-            switch orient {
-            case .portrait: conn.videoOrientation = .portrait
-            case .portraitUpsideDown: conn.videoOrientation = .portraitUpsideDown
-            case .landscapeLeft: conn.videoOrientation = .landscapeLeft
-            case .landscapeRight: conn.videoOrientation = .landscapeRight
+            guard let c = previewLayer.connection, c.isVideoOrientationSupported else { return }
+            switch window?.windowScene?.interfaceOrientation ?? .portrait {
+            case .portrait: c.videoOrientation = .portrait
+            case .portraitUpsideDown: c.videoOrientation = .portraitUpsideDown
+            case .landscapeLeft: c.videoOrientation = .landscapeLeft
+            case .landscapeRight: c.videoOrientation = .landscapeRight
             default: break
             }
         }
@@ -91,9 +76,7 @@ final class CameraStreamManager: NSObject, ObservableObject, AVCaptureVideoDataO
         }
         setupEncoder()
         startUSBServer()
-        NotificationCenter.default.addObserver(forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.sendOrientation()
-        }
+        NotificationCenter.default.addObserver(forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.sendOrientation() }
     }
 
     func start() {
@@ -122,37 +105,26 @@ final class CameraStreamManager: NSObject, ObservableObject, AVCaptureVideoDataO
         session.beginConfiguration()
         session.sessionPreset = .hd1920x1080
         if let old = currentInput { session.removeInput(old); currentInput = nil }
-
         let pos: AVCaptureDevice.Position = front ? .front : .back
         guard let dev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: pos) ?? AVCaptureDevice.default(for: .video),
-              let input = try? AVCaptureDeviceInput(device: dev), session.canAddInput(input) else {
-            session.commitConfiguration(); return
-        }
-        session.addInput(input)
-        currentInput = input
-        device = dev
+              let input = try? AVCaptureDeviceInput(device: dev), session.canAddInput(input) else { session.commitConfiguration(); return }
+        session.addInput(input); currentInput = input; device = dev
 
         if let fmt = dev.formats.first(where: {
             let d = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
             return d.width == 1920 && d.height == 1080 && $0.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= 60 }
         }) {
-            try? dev.lockForConfiguration()
-            dev.activeFormat = fmt
+            try? dev.lockForConfiguration(); dev.activeFormat = fmt
             dev.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 60)
-            dev.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 60)
-            dev.unlockForConfiguration()
+            dev.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 60); dev.unlockForConfiguration()
         }
-
         if session.outputs.isEmpty {
             let out = AVCaptureVideoDataOutput()
             out.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
-            out.alwaysDiscardsLateVideoFrames = true
-            out.setSampleBufferDelegate(self, queue: queue)
+            out.alwaysDiscardsLateVideoFrames = true; out.setSampleBufferDelegate(self, queue: queue)
             if session.canAddOutput(out) { session.addOutput(out) }
         }
-        if let conn = session.outputs.first?.connection(with: .video), conn.isVideoOrientationSupported {
-            conn.videoOrientation = .landscapeRight
-        }
+        if let c = session.outputs.first?.connection(with: .video), c.isVideoOrientationSupported { c.videoOrientation = .landscapeRight }
         session.commitConfiguration()
 
         let mz = min(dev.activeFormat.videoMaxZoomFactor, 6.0)
@@ -161,3 +133,12 @@ final class CameraStreamManager: NSObject, ObservableObject, AVCaptureVideoDataO
             self.maxZoom = max(mz, 1.0); self.exposureBias = 0.0; self.wbLocked = false; self.manualFocus = false
         }
     }
+
+    private func setupEncoder() {
+        let st = VTCompressionSessionCreate(allocator: kCFAllocatorDefault, width: 1920, height: 1080, codecType: kCMVideoCodecType_H264, encoderSpecification: nil, imageBufferAttributes: nil, compressedDataAllocator: nil, outputCallback: { ref, _, status, _, sb in
+            guard status == noErr, let sb = sb, let ref = ref else { return }
+            Unmanaged<CameraStreamManager>.fromOpaque(ref).takeUnretainedValue().onEncoded(sb)
+        }, refcon: Unmanaged.passUnretained(self).toOpaque(), compressionSessionOut: &encoder)
+        guard st == noErr, let enc = encoder else { return }
+        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_ProfileLevel
