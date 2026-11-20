@@ -19,5 +19,6 @@ targets:
         NSCameraUsageDescription: "Przechwytywanie obrazu z aparatu"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationLandscapeRight
-          - UIInterfaceOrientationLandscapeLeft
+      - UIInterfaceOrientationPortrait
+      - UIInterfaceOrientationLandscapeLeft
+      - UIInterfaceOrientationLandscapeRight
