@@ -161,31 +161,3 @@ final class CameraStreamManager: NSObject, ObservableObject, AVCaptureVideoDataO
             self.maxZoom = max(mz, 1.0); self.exposureBias = 0.0; self.wbLocked = false; self.manualFocus = false
         }
     }
-
-    private func setupEncoder() {
-        let st = VTCompressionSessionCreate(allocator: kCFAllocatorDefault, width: 1920, height: 1080, codecType: kCMVideoCodecType_H264, encoderSpecification: nil, imageBufferAttributes: nil, compressedDataAllocator: nil, outputCallback: { ref, _, status, _, sb in
-            guard status == noErr, let sb = sb, let ref = ref else { return }
-            Unmanaged<CameraStreamManager>.fromOpaque(ref).takeUnretainedValue().onEncoded(sb)
-        }, refcon: Unmanaged.passUnretained(self).toOpaque(), compressionSessionOut: &encoder)
-
-        guard st == noErr, let enc = encoder else { return }
-        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
-        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
-        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 60 as CFNumber)
-        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
-        VTSessionSetProperty(enc, key: kVTCompressionPropertyKey_AverageBitRate, value: 12_000_000 as CFNumber)
-        VTCompressionSessionPrepareToEncodeFrames(enc)
-    }
-
-    func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard self.connection != nil, let enc = encoder, let buf = CMSampleBufferGetImageBuffer(sb) else { return }
-        VTCompressionSessionEncodeFrame(enc, imageBuffer: buf, presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sb), duration: .invalid, frameProperties: nil, sourceFrameRefcon: nil, infoFlagsOut: nil)
-    }
-
-    private func onEncoded(_ sb: CMSampleBuffer) {
-        guard let conn = connection else { return }
-        var out = Data()
-        let startCode: [UInt8] = [0, 0, 0, 1]
-        let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]]
-        let isKey = !(
