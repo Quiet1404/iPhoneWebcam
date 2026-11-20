@@ -1,23 +1,57 @@
 name: Build iOS IPA
-on: [workflow_dispatch]
+
+on:
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install XcodeGen and generate project
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate AppIcon from logo.png
         run: |
-          brew install xcodegen
-          xcodegen generate
-      - name: Build unsigned app
+          mkdir -p Assets.xcassets/AppIcon.appiconset
+          sips -s format png -z 120 120 logo.png --out Assets.xcassets/AppIcon.appiconset/icon_120.png
+          sips -s format png -z 180 180 logo.png --out Assets.xcassets/AppIcon.appiconset/icon_180.png
+          sips -s format png -z 1024 1024 logo.png --out Assets.xcassets/AppIcon.appiconset/icon_1024.png
+          cat << 'EOF' > Assets.xcassets/AppIcon.appiconset/Contents.json
+          {
+            "images": [
+              { "filename": "icon_120.png", "idiom": "iphone", "scale": "2x", "size": "60x60" },
+              { "filename": "icon_180.png", "idiom": "iphone", "scale": "3x", "size": "60x60" },
+              { "filename": "icon_1024.png", "idiom": "ios-marketing", "scale": "1x", "size": "1024x1024" }
+            ],
+            "info": { "author": "xcode", "version": 1 }
+          }
+          EOF
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build Unsigned App
         run: |
-          xcodebuild -project iPhoneWebcam.xcodeproj -scheme iPhoneWebcam -sdk iphoneos -configuration Release CONFIGURATION_BUILD_DIR=build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          xcodebuild -project iPhoneWebcam.xcodeproj \
+            -scheme iPhoneWebcam \
+            -sdk iphoneos \
+            -configuration Release \
+            CONFIGURATION_BUILD_DIR=build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: Package IPA
         run: |
           mkdir -p Payload
           cp -r build/iPhoneWebcam.app Payload/
           zip -r iPhoneWebcam.ipa Payload
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: iPhoneWebcam-IPA
           path: iPhoneWebcam.ipa
