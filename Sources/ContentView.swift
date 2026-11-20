@@ -6,12 +6,12 @@ import Network
 
 struct ContentView: View {
     @StateObject private var streamer = CameraStreamer()
-    
+
     var body: some View {
         ZStack {
             CameraPreview(session: streamer.session)
                 .ignoresSafeArea()
-            
+
             VStack {
                 Spacer()
                 Text(streamer.statusText)
@@ -32,7 +32,7 @@ struct ContentView: View {
 final class PreviewContainerView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
     var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
-    
+
     override func layoutSubviews() {
         super.layoutSubviews()
         previewLayer.frame = bounds
@@ -61,24 +61,29 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var compressionSession: VTCompressionSession?
     private var listener: NWListener?
     private var activeConnection: NWConnection?
-    private let queue = DispatchQueue(label: "video.capture.queue")
+    private let queue = DispatchQueue(label: "video.capture.queue", qos: .userInteractive)
     private var forceKeyFrame = false
-    
+
     func start() {
         setupServer()
         setupCamera()
         setupEncoder(width: 1920, height: 1080)
     }
-    
+
     private func setupServer() {
         do {
-            listener = try NWListener(using: .tcp, on: 8888)
+            // Wyłączenie algorytmu Nagle'a (noDelay) dla zerowego opóźnienia na USB
+            let tcpOptions = NWProtocolTCP.Options()
+            tcpOptions.noDelay = true
+            let params = NWParameters(tls: nil, tcp: tcpOptions)
+
+            listener = try NWListener(using: params, on: 8888)
             listener?.newConnectionHandler = { [weak self] connection in
                 self?.activeConnection?.cancel()
                 self?.activeConnection = connection
                 self?.forceKeyFrame = true
                 connection.start(queue: self?.queue ?? .main)
-                DispatchQueue.main.async { self?.statusText = "Połączono z PC (1080p 60fps)" }
+                DispatchQueue.main.async { self?.statusText = "Połączono (Low-Latency 1080p)" }
             }
             listener?.start(queue: queue)
             DispatchQueue.main.async { self.statusText = "Oczekiwanie na PC (Port 8888)..." }
@@ -86,16 +91,16 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             DispatchQueue.main.async { self.statusText = "Błąd sieci: \(error.localizedDescription)" }
         }
     }
-    
+
     private func setupCamera() {
         session.beginConfiguration()
         session.sessionPreset = .hd1920x1080
-        
+
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: device) else { return }
-        
+
         if session.canAddInput(input) { session.addInput(input) }
-        
+
         do {
             try device.lockForConfiguration()
             for format in device.formats {
@@ -113,21 +118,21 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             }
             device.unlockForConfiguration()
         } catch {}
-        
+
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
         videoOutput.setSampleBufferDelegate(self, queue: queue)
         videoOutput.alwaysDiscardsLateVideoFrames = true
-        
+
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
-        
+
         if let connection = videoOutput.connection(with: .video), connection.isVideoOrientationSupported {
             connection.videoOrientation = .landscapeRight
         }
-        
+
         session.commitConfiguration()
         queue.async { self.session.startRunning() }
     }
-    
+
     private func setupEncoder(width: Int32, height: Int32) {
         VTCompressionSessionCreate(
             allocator: nil, width: width, height: height,
@@ -141,27 +146,27 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         guard let cs = compressionSession else { return }
         VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
-        VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_AverageBitRate, value: 12_000_000 as CFNumber)
+        VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_AverageBitRate, value: 10_000_000 as CFNumber)
         VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 30 as CFNumber)
         VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTCompressionSessionPrepareToEncodeFrames(cs)
     }
-    
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard activeConnection != nil,
               let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
               let cs = compressionSession else { return }
-        
+
         var props: CFDictionary? = nil
         if forceKeyFrame {
             props = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
             forceKeyFrame = false
         }
-        
+
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         VTCompressionSessionEncodeFrame(cs, imageBuffer: imageBuffer, presentationTimeStamp: pts, duration: .invalid, frameProperties: props, sourceFrameRefcon: nil, infoFlagsOut: nil)
     }
-    
+
     fileprivate func sendEncodedData(_ data: Data) {
         activeConnection?.send(content: data, completion: .contentProcessed { _ in })
     }
@@ -170,23 +175,23 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 private let encodingOutputCallback: VTCompressionOutputCallback = { outputCallbackRefCon, _, status, _, sampleBuffer in
     guard status == noErr, let sampleBuffer = sampleBuffer, let refCon = outputCallbackRefCon else { return }
     let streamer = Unmanaged<CameraStreamer>.fromOpaque(refCon).takeUnretainedValue()
-    
+
     let startCode = Data([0x00, 0x00, 0x00, 0x01])
     var payload = Data()
-    
+
     if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
        let attachment = attachments.first,
        !(attachment[kCMSampleAttachmentKey_NotSync] as? Bool ?? false),
        let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
-        
+
         var spsSize = 0, spsCount = 0
         var spsPointer: UnsafePointer<UInt8>?
         CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, parameterSetIndex: 0, parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: &spsCount, nalUnitHeaderLengthOut: nil)
-        
+
         var ppsSize = 0, ppsCount = 0
         var ppsPointer: UnsafePointer<UInt8>?
         CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, parameterSetIndex: 1, parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount, nalUnitHeaderLengthOut: nil)
-        
+
         if let sps = spsPointer, let pps = ppsPointer {
             payload.append(startCode)
             payload.append(sps, count: spsSize)
@@ -194,22 +199,22 @@ private let encodingOutputCallback: VTCompressionOutputCallback = { outputCallba
             payload.append(pps, count: ppsSize)
         }
     }
-    
+
     guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
     var totalLength = 0
     var dataPointer: UnsafeMutablePointer<Int8>?
     CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &totalLength, dataPointerOut: &dataPointer)
-    
+
     var offset = 0
     while offset < totalLength - 4, let ptr = dataPointer {
         var nalLength: UInt32 = 0
         memcpy(&nalLength, ptr.advanced(by: offset), 4)
         nalLength = CFSwapInt32BigToHost(nalLength)
-        
+
         payload.append(startCode)
         payload.append(UnsafeBufferPointer(start: UnsafeRawPointer(ptr.advanced(by: offset + 4)).assumingMemoryBound(to: UInt8.self), count: Int(nalLength)))
         offset += 4 + Int(nalLength)
     }
-    
+
     streamer.sendEncodedData(payload)
 }
