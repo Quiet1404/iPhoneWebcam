@@ -13,7 +13,6 @@ struct ContentView: View {
                 .ignoresSafeArea()
             
             VStack {
-                // Górny pasek sterowania (Latarka + Tryb AF/MF)
                 HStack(spacing: 12) {
                     Button(action: { streamer.toggleTorch() }) {
                         HStack(spacing: 6) {
@@ -48,7 +47,6 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                // Suwak ręcznej ostrości (widoczny tylko w trybie MF)
                 if streamer.isManualFocus {
                     HStack(spacing: 12) {
                         Text("Blisko")
@@ -76,7 +74,6 @@ struct ContentView: View {
                     .padding(.bottom, 6)
                 }
                 
-                // Pasek statusu połączenia
                 Text(streamer.statusText)
                     .font(.footnote)
                     .padding(.horizontal, 12)
@@ -141,37 +138,42 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
     
     func toggleTorch() {
+        setTorch(!isTorchOn)
+    }
+    
+    func setTorch(_ on: Bool) {
         guard let device = captureDevice, device.hasTorch else { return }
         do {
             try device.lockForConfiguration()
-            if device.torchMode == .on {
-                device.torchMode = .off
-                DispatchQueue.main.async { self.isTorchOn = false }
-            } else {
+            if on {
                 try device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
-                DispatchQueue.main.async { self.isTorchOn = true }
+            } else {
+                device.torchMode = .off
             }
             device.unlockForConfiguration()
+            DispatchQueue.main.async { self.isTorchOn = on }
         } catch {}
     }
     
     func toggleFocusMode() {
+        setFocusMode(manual: !isManualFocus)
+    }
+    
+    func setFocusMode(manual: Bool) {
         guard let device = captureDevice else { return }
         do {
             try device.lockForConfiguration()
-            if isManualFocus {
+            if !manual {
                 if device.isFocusModeSupported(.continuousAutoFocus) {
                     device.focusMode = .continuousAutoFocus
                 }
                 DispatchQueue.main.async { self.isManualFocus = false }
-            } else {
-                if device.isFocusModeSupported(.locked) {
-                    let currentPos = device.lensPosition
-                    device.setFocusModeLocked(lensPosition: currentPos, completionHandler: nil)
-                    DispatchQueue.main.async {
-                        self.focusPosition = currentPos
-                        self.isManualFocus = true
-                    }
+            } else if device.isFocusModeSupported(.locked) {
+                let currentPos = device.lensPosition
+                device.setFocusModeLocked(lensPosition: currentPos, completionHandler: nil)
+                DispatchQueue.main.async {
+                    self.focusPosition = currentPos
+                    self.isManualFocus = true
                 }
             }
             device.unlockForConfiguration()
@@ -179,12 +181,16 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
     
     func setManualFocus(_ value: Float) {
-        focusPosition = value
-        guard isManualFocus, let device = captureDevice, device.isFocusModeSupported(.locked) else { return }
+        let clamped = min(max(value, 0.0), 1.0)
+        guard let device = captureDevice, device.isFocusModeSupported(.locked) else { return }
         do {
             try device.lockForConfiguration()
-            device.setFocusModeLocked(lensPosition: value, completionHandler: nil)
+            device.setFocusModeLocked(lensPosition: clamped, completionHandler: nil)
             device.unlockForConfiguration()
+            DispatchQueue.main.async {
+                self.isManualFocus = true
+                self.focusPosition = clamped
+            }
         } catch {}
     }
     
@@ -200,12 +206,37 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self?.activeConnection = connection
                 self?.forceKeyFrame = true
                 connection.start(queue: self?.queue ?? .main)
+                self?.receiveCommands(on: connection)
                 DispatchQueue.main.async { self?.statusText = "Połączono (Low-Latency 1080p)" }
             }
             listener?.start(queue: queue)
             DispatchQueue.main.async { self.statusText = "Oczekiwanie na PC (Port 8888)..." }
         } catch {
             DispatchQueue.main.async { self.statusText = "Błąd sieci: \(error.localizedDescription)" }
+        }
+    }
+    
+    private func receiveCommands(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { [weak self] data, _, isComplete, error in
+            if let data = data, let text = String(data: data, encoding: .utf8) {
+                for line in text.components(separatedBy: "\n") {
+                    let cmd = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if cmd == "TORCH:1" {
+                        self?.setTorch(true)
+                    } else if cmd == "TORCH:0" {
+                        self?.setTorch(false)
+                    } else if cmd == "AF" {
+                        self?.setFocusMode(manual: false)
+                    } else if cmd == "MF" {
+                        self?.setFocusMode(manual: true)
+                    } else if cmd.hasPrefix("FOCUS:"), let val = Float(cmd.dropFirst(6)) {
+                        self?.setManualFocus(val)
+                    }
+                }
+            }
+            if !isComplete && error == nil {
+                self?.receiveCommands(on: connection)
+            }
         }
     }
     
