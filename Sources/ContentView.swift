@@ -19,7 +19,45 @@ enum AppLanguage: String {
     var zoom: String { self == .en ? "Zoom" : "Zoom" }
     var exp: String { self == .en ? "Exposure" : "Ekspozycja" }
     var wb: String { self == .en ? "WB Lock" : "Blokada WB" }
-    var hint: String { self == .en ? "Synced live with Windows • Keep app open" : "Synchronizacja z PC • Nie zamykaj aplikacji" }
+    var hint: String { self == .en ? "Synced live with Windows • Scroll for more controls" : "Synchronizacja z PC • Przewiń w dół po więcej opcji" }
+}
+
+struct CameraPreviewView: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> PreviewUIView {
+        let view = PreviewUIView()
+        view.previewLayer.session = session
+        view.previewLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateUIView(_ uiView: PreviewUIView, context: Context) {
+        uiView.updateOrientation()
+    }
+
+    final class PreviewUIView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            previewLayer.frame = bounds
+            updateOrientation()
+        }
+
+        func updateOrientation() {
+            guard let conn = previewLayer.connection, conn.isVideoOrientationSupported else { return }
+            let orient = window?.windowScene?.interfaceOrientation ?? .portrait
+            switch orient {
+            case .portrait: conn.videoOrientation = .portrait
+            case .portraitUpsideDown: conn.videoOrientation = .portraitUpsideDown
+            case .landscapeLeft: conn.videoOrientation = .landscapeLeft
+            case .landscapeRight: conn.videoOrientation = .landscapeRight
+            default: break
+            }
+        }
+    }
 }
 
 final class CameraStreamManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -35,7 +73,7 @@ final class CameraStreamManager: NSObject, ObservableObject, AVCaptureVideoDataO
     @Published var wbLocked = false
     @Published var autoOrientation = true
 
-    private let session = AVCaptureSession()
+    let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "com.iphonewebcam.video", qos: .userInteractive)
     private var device: AVCaptureDevice?
     private var currentInput: AVCaptureDeviceInput?
@@ -294,72 +332,77 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 14) {
-                HStack {
-                    Text(l.title).font(.headline).foregroundColor(.white)
-                    Spacer()
-                    Button(l.badge) { langRaw = (l == .en) ? "PL" : "EN" }
-                        .font(.subheadline.bold()).foregroundColor(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color.white.opacity(0.16)).cornerRadius(8)
-                }.padding(.horizontal).padding(.top, 8)
+            CameraPreviewView(session: cam.session)
+                .ignoresSafeArea()
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
 
-                HStack(spacing: 12) {
-                    Image(systemName: cam.isConnected ? "video.fill" : "cable.connector")
-                        .font(.title3).foregroundColor(cam.isConnected ? .green : .orange)
-                        .frame(width: 40, height: 40)
-                        .background((cam.isConnected ? Color.green : Color.orange).opacity(0.18)).clipShape(Circle())
-                    Text(!cam.cameraAuthorized ? l.statusDenied : (cam.isConnected ? l.statusLive : l.statusWait))
-                        .font(.subheadline.weight(.medium)).foregroundColor(.white)
-                    Spacer()
-                }.padding(12).background(Color.white.opacity(0.08)).cornerRadius(14).padding(.horizontal)
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 14) {
+                    HStack {
+                        Text(l.title).font(.headline).foregroundColor(.white)
+                        Spacer()
+                        Button(l.badge) { langRaw = (l == .en) ? "PL" : "EN" }
+                            .font(.subheadline.bold()).foregroundColor(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Color.black.opacity(0.55)).cornerRadius(8)
+                    }.padding(.horizontal).padding(.top, 8)
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    Button { cam.switchCamera(front: !cam.isFrontCamera) } label: {
-                        ControlTile(icon: "arrow.triangle.2.circlepath.camera.fill", title: "\(l.cam): \(cam.isFrontCamera ? l.front : l.back)", active: cam.isFrontCamera, color: .purple)
-                    }
-                    Button { cam.setTorch(!cam.torchOn) } label: {
-                        ControlTile(icon: cam.torchOn ? "flashlight.on.fill" : "flashlight.off.fill", title: l.torch, active: cam.torchOn, color: .yellow, darkText: true)
-                    }.disabled(cam.isFrontCamera).opacity(cam.isFrontCamera ? 0.45 : 1)
+                    HStack(spacing: 12) {
+                        Image(systemName: cam.isConnected ? "video.fill" : "cable.connector")
+                            .font(.title3).foregroundColor(cam.isConnected ? .green : .orange)
+                            .frame(width: 40, height: 40)
+                            .background((cam.isConnected ? Color.green : Color.orange).opacity(0.22)).clipShape(Circle())
+                        Text(!cam.cameraAuthorized ? l.statusDenied : (cam.isConnected ? l.statusLive : l.statusWait))
+                            .font(.subheadline.weight(.medium)).foregroundColor(.white)
+                        Spacer()
+                    }.padding(12).background(Color.black.opacity(0.55)).cornerRadius(14).padding(.horizontal)
 
-                    Button { cam.manualFocus ? cam.setAutoFocus() : cam.setManualFocus(cam.lensPosition) } label: {
-                        ControlTile(icon: cam.manualFocus ? "scope" : "viewfinder", title: "\(l.focus): \(cam.manualFocus ? "MF" : "AF")", active: cam.manualFocus, color: .blue)
-                    }
-                    Button { cam.autoOrientation.toggle(); if cam.autoOrientation { cam.sendOrientation() } } label: {
-                        ControlTile(icon: "rectangle.portrait.rotate", title: l.autoRot, active: cam.autoOrientation, color: .green)
-                    }
-                }.padding(.horizontal)
-
-                VStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text("\(l.zoom): \(String(format: "%.1fx", cam.zoomFactor))").font(.caption.bold()).foregroundColor(.white)
-                            Spacer()
-                            Button("1.0x") { cam.setZoom(1.0) }.font(.caption2.bold()).foregroundColor(.cyan)
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        Button { cam.switchCamera(front: !cam.isFrontCamera) } label: {
+                            ControlTile(icon: "arrow.triangle.2.circlepath.camera.fill", title: "\(l.cam): \(cam.isFrontCamera ? l.front : l.back)", active: cam.isFrontCamera, color: .purple)
                         }
-                        Slider(value: Binding(get: { Double(cam.zoomFactor) }, set: { cam.setZoom(CGFloat($0)) }), in: 1.0...Double(cam.maxZoom))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text("\(l.exp): \(String(format: "%+.1f EV", cam.exposureBias))").font(.caption.bold()).foregroundColor(.white)
-                            Spacer()
-                            Button("0.0 EV") { cam.setExposure(0.0) }.font(.caption2.bold()).foregroundColor(.cyan)
-                        }
-                        Slider(value: Binding(get: { Double(cam.exposureBias) }, set: { cam.setExposure(Float($0)) }), in: -2.0...2.0)
-                    }
-                    Button { cam.setWBLock(!cam.wbLocked) } label: {
-                        HStack {
-                            Image(systemName: cam.wbLocked ? "lock.fill" : "sun.max.fill")
-                            Text("\(l.wb): \(cam.wbLocked ? "ON" : "AUTO")").font(.caption.bold())
-                        }.frame(maxWidth: .infinity).padding(.vertical, 9)
-                        .background(cam.wbLocked ? Color.orange.opacity(0.8) : Color.white.opacity(0.12))
-                        .foregroundColor(.white).cornerRadius(10)
-                    }
-                }.padding(12).background(Color.white.opacity(0.08)).cornerRadius(14).padding(.horizontal)
+                        Button { cam.setTorch(!cam.torchOn) } label: {
+                            ControlTile(icon: cam.torchOn ? "flashlight.on.fill" : "flashlight.off.fill", title: l.torch, active: cam.torchOn, color: .yellow, darkText: true)
+                        }.disabled(cam.isFrontCamera).opacity(cam.isFrontCamera ? 0.45 : 1)
 
-                Spacer()
-                Text(l.hint).font(.caption2).foregroundColor(.gray).multilineTextAlignment(.center).padding(.horizontal).padding(.bottom, 6)
+                        Button { cam.manualFocus ? cam.setAutoFocus() : cam.setManualFocus(cam.lensPosition) } label: {
+                            ControlTile(icon: cam.manualFocus ? "scope" : "viewfinder", title: "\(l.focus): \(cam.manualFocus ? "MF" : "AF")", active: cam.manualFocus, color: .blue)
+                        }
+                        Button { cam.autoOrientation.toggle(); if cam.autoOrientation { cam.sendOrientation() } } label: {
+                            ControlTile(icon: "rectangle.portrait.rotate", title: l.autoRot, active: cam.autoOrientation, color: .green)
+                        }
+                    }.padding(.horizontal)
+
+                    VStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text("\(l.zoom): \(String(format: "%.1fx", cam.zoomFactor))").font(.caption.bold()).foregroundColor(.white)
+                                Spacer()
+                                Button("1.0x") { cam.setZoom(1.0) }.font(.caption2.bold()).foregroundColor(.cyan)
+                            }
+                            Slider(value: Binding(get: { Double(cam.zoomFactor) }, set: { cam.setZoom(CGFloat($0)) }), in: 1.0...Double(cam.maxZoom))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text("\(l.exp): \(String(format: "%+.1f EV", cam.exposureBias))").font(.caption.bold()).foregroundColor(.white)
+                                Spacer()
+                                Button("0.0 EV") { cam.setExposure(0.0) }.font(.caption2.bold()).foregroundColor(.cyan)
+                            }
+                            Slider(value: Binding(get: { Double(cam.exposureBias) }, set: { cam.setExposure(Float($0)) }), in: -2.0...2.0)
+                        }
+                        Button { cam.setWBLock(!cam.wbLocked) } label: {
+                            HStack {
+                                Image(systemName: cam.wbLocked ? "lock.fill" : "sun.max.fill")
+                                Text("\(l.wb): \(cam.wbLocked ? "ON" : "AUTO")").font(.caption.bold())
+                            }.frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .background(cam.wbLocked ? Color.orange.opacity(0.85) : Color.white.opacity(0.16))
+                            .foregroundColor(.white).cornerRadius(10)
+                        }
+                    }.padding(12).background(Color.black.opacity(0.55)).cornerRadius(14).padding(.horizontal)
+
+                    Text(l.hint).font(.caption2).foregroundColor(.white.opacity(0.8)).multilineTextAlignment(.center).padding(.horizontal).padding(.bottom, 16)
+                }
             }
         }
         .onAppear { cam.start() }
@@ -374,7 +417,7 @@ struct ControlTile: View {
             Image(systemName: icon).font(.title3)
             Text(title).font(.caption.bold()).lineLimit(1)
         }.frame(maxWidth: .infinity).padding(.vertical, 11)
-        .background(active ? color.opacity(0.85) : Color.white.opacity(0.12))
+        .background(active ? color.opacity(0.85) : Color.black.opacity(0.55))
         .foregroundColor(active && darkText ? .black : .white).cornerRadius(12)
     }
 }
