@@ -7,18 +7,16 @@ targets:
     platform: iOS
     deploymentTarget: "15.0"
     sources:
-      - Sources
-      - Assets.xcassets
-    settings:
-      base:
-        SWIFT_VERSION: "5.0"
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      - path: Sources
+      - path: Assets.xcassets
     info:
       path: Info.plist
       properties:
-        NSCameraUsageDescription: "Przechwytywanie obrazu z aparatu"
-        UILaunchScreen: {}
+        CFBundleDisplayName: iPhone Webcam Pro
+        NSCameraUsageDescription: Camera access is required to stream 1080p 60 FPS video to your PC over USB.
+        UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
-      - UIInterfaceOrientationPortrait
-      - UIInterfaceOrientationLandscapeLeft
-      - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UILaunchScreen: {}
