@@ -7,8 +7,39 @@ targets:
     platform: iOS
     deploymentTarget: "15.0"
     sources: [Sources]
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
     info:
-      path: Sources/Info.plist
+      path: Info.plist
       properties:
         NSCameraUsageDescription: "Przechwytywanie obrazu z aparatu jako kamera internetowa"
         UILaunchScreen: {}
+Weryfikacja: W głównym katalogu repozytorium plik project.yml ma ścieżkę path: Info.plist (bez Sources/).
+
+Zaktualizuj plik .github/workflows/build.yml: Wejdź w .github/workflows/build.yml, kliknij ikonę edycji, dodaj parametr -destination 'generic/platform=iOS' w kroku Build unsigned app i kliknij Commit changes...:
+
+YAML
+name: Build iOS IPA
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned app
+        run: |
+          xcodebuild -project iPhoneWebcam.xcodeproj -scheme iPhoneWebcam -sdk iphoneos -destination 'generic/platform=iOS' -configuration Release CONFIGURATION_BUILD_DIR=build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/iPhoneWebcam.app Payload/
+          zip -r iPhoneWebcam.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iPhoneWebcam-IPA
+          path: iPhoneWebcam.ipa
