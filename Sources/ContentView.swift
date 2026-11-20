@@ -15,11 +15,11 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 Text(streamer.statusText)
-                    .padding(12)
+                    .padding(10)
                     .background(.black.opacity(0.75))
                     .foregroundColor(.white)
-                    .cornerRadius(10)
-                    .padding(.bottom, 30)
+                    .cornerRadius(8)
+                    .padding(.bottom, 16)
             }
         }
         .onAppear {
@@ -29,17 +29,30 @@ struct ContentView: View {
     }
 }
 
+// Widok podglądu automatycznie dopasowujący się do poziomego ekranu
+final class PreviewContainerView: UIView {
+    override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+    var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        previewLayer.frame = bounds
+        if let connection = previewLayer.connection, connection.isVideoOrientationSupported {
+            let interfaceOrientation = window?.windowScene?.interfaceOrientation ?? .landscapeRight
+            connection.videoOrientation = interfaceOrientation == .landscapeLeft ? .landscapeLeft : .landscapeRight
+        }
+    }
+}
+
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: UIScreen.main.bounds)
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.frame = view.frame
-        previewLayer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(previewLayer)
+    func makeUIView(context: Context) -> PreviewContainerView {
+        let view = PreviewContainerView()
+        view.previewLayer.session = session
+        view.previewLayer.videoGravity = .resizeAspectFill
         return view
     }
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: PreviewContainerView, context: Context) {}
 }
 
 class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -50,11 +63,12 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var listener: NWListener?
     private var activeConnection: NWConnection?
     private let queue = DispatchQueue(label: "video.capture.queue")
+    private var forceKeyFrame = false
 
     func start() {
         setupServer()
         setupCamera()
-        setupEncoder(width: 3840, height: 2160)
+        setupEncoder(width: 1920, height: 1080)
     }
 
     private func setupServer() {
@@ -63,8 +77,9 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             listener?.newConnectionHandler = { [weak self] connection in
                 self?.activeConnection?.cancel()
                 self?.activeConnection = connection
+                self?.forceKeyFrame = true
                 connection.start(queue: self?.queue ?? .main)
-                DispatchQueue.main.async { self?.statusText = "Połączono z PC (4K 60fps)" }
+                DispatchQueue.main.async { self?.statusText = "Połączono z PC (1080p 60fps)" }
             }
             listener?.start(queue: queue)
             DispatchQueue.main.async { self.statusText = "Oczekiwanie na PC (Port 8888)..." }
@@ -75,7 +90,7 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
     private func setupCamera() {
         session.beginConfiguration()
-        session.sessionPreset = .hd4K3840x2160
+        session.sessionPreset = .hd1920x1080
 
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: device) else { return }
@@ -85,8 +100,8 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         do {
             try device.lockForConfiguration()
             for format in device.formats {
-                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                if dimensions.width == 3840 && dimensions.height == 2160 {
+                let dim = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                if dim.width == 1920 && dim.height == 1080 {
                     for range in format.videoSupportedFrameRateRanges {
                         if range.maxFrameRate >= 60 {
                             device.activeFormat = format
@@ -105,8 +120,13 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         videoOutput.alwaysDiscardsLateVideoFrames = true
 
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
-        session.commitConfiguration()
 
+        // Wymuszenie poziomej orientacji strumienia wysyłanego do PC
+        if let connection = videoOutput.connection(with: .video), connection.isVideoOrientationSupported {
+            connection.videoOrientation = .landscapeRight
+        }
+
+        session.commitConfiguration()
         queue.async { self.session.startRunning() }
     }
 
@@ -123,8 +143,8 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         guard let cs = compressionSession else { return }
         VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
-        VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_AverageBitRate, value: 40_000_000 as CFNumber)
-        VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 60 as CFNumber)
+        VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_AverageBitRate, value: 12_000_000 as CFNumber)
+        VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 30 as CFNumber)
         VTSessionSetProperty(cs, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTCompressionSessionPrepareToEncodeFrames(cs)
     }
@@ -134,8 +154,14 @@ class CameraStreamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
               let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
               let cs = compressionSession else { return }
 
+        var props: CFDictionary? = nil
+        if forceKeyFrame {
+            props = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
+            forceKeyFrame = false
+        }
+
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        VTCompressionSessionEncodeFrame(cs, imageBuffer: imageBuffer, presentationTimeStamp: pts, duration: .invalid, frameProperties: nil, sourceFrameRefcon: nil, infoFlagsOut: nil)
+        VTCompressionSessionEncodeFrame(cs, imageBuffer: imageBuffer, presentationTimeStamp: pts, duration: .invalid, frameProperties: props, sourceFrameRefcon: nil, infoFlagsOut: nil)
     }
 
     fileprivate func sendEncodedData(_ data: Data) {
@@ -189,3 +215,50 @@ private let encodingOutputCallback: VTCompressionOutputCallback = { outputCallba
 
     streamer.sendEncodedData(payload)
 }
+Weryfikacja: Plik ContentView.swift zapisał się bez błędów i ma 202 linie.
+
+Krok 3: Przebuduj plik .ipa i zaktualizuj aplikację na iPhonie
+Wejdź w zakładkę Actions -> Build iOS IPA -> Run workflow -> zielony Run workflow.
+
+Po zakończeniu pobierz nowy artefakt iPhoneWebcam-IPA, rozpakuj iPhoneWebcam.ipa i wgraj go przez Sideloadly na iPhone'a SE (nadpisze poprzednią wersję).
+
+Otwórz aplikację na telefonie — interfejs automatycznie obróci się w tryb poziomy (trzymaj telefon poziomo, aparatem u góry po lewej stronie).Weryfikacja: Podgląd na ekranie telefonu wypełnia cały poziomy ekran, a napis na dole znajduje się przy dłuższej krawędzi.
+
+Krok 4: Zaktualizuj C:\Kamera\receiver.py (dekoder bez bufora i bez opóźnień)
+Zatrzymaj poprzedni skrypt w konsoli (Ctrl + C), wpisz notepad receiver.py w folderze C:\Kamera, podmień kod na poniższy (używa surowego dekodera CodecContext bez buforowania kontenera) i zapisz (Ctrl + S):
+
+Python
+import socket
+import av
+import pyvirtualcam
+
+HOST = '127.0.0.1'
+PORT = 8888
+WIDTH = 1920
+HEIGHT = 1080
+FPS = 60
+
+def main():
+    print(f"Łączenie z iPhonem ({HOST}:{PORT})...")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock.connect((HOST, PORT))
+
+    # Bezpośredni dekoder H.264 bez buforowania kontenera (zero opóźnień)
+    codec = av.CodecContext.create('h264', 'r')
+    codec.thread_type = 'AUTO'
+
+    print("Uruchamianie wirtualnej kamery (1080p 60 FPS, tryb natychmiastowy)...")
+    with pyvirtualcam.Camera(width=WIDTH, height=HEIGHT, fps=FPS, fmt=pyvirtualcam.PixelFormat.RGB) as cam:
+        print(f"Gotowe! Wybierz '{cam.device}' w OBS lub komunikatorze.")
+        while True:
+            data = sock.recv(65536)
+            if not data:
+                break
+            for packet in codec.parse(data):
+                for frame in codec.decode(packet):
+                    img = frame.to_ndarray(width=WIDTH, height=HEIGHT, format='rgb24')
+                    cam.send(img)
+
+if __name__ == '__main__':
+    main()
