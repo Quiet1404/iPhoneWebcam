@@ -1,0 +1,14 @@
+name: iPhoneWebcam
+options:
+  bundleIdPrefix: com.webcam
+targets:
+  iPhoneWebcam:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources: [Sources]
+    info:
+      path: Sources/Info.plist
+      properties:
+        NSCameraUsageDescription: "Przechwytywanie obrazu z aparatu jako kamera internetowa"
+        UILaunchScreen: {}
