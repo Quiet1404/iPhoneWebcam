@@ -8,9 +8,11 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - Sources
+      - Assets.xcassets
     settings:
       base:
         SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Info.plist
       properties:
